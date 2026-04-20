@@ -32,7 +32,7 @@ class WaiterCallCreateRequest(BaseModel):
 
 
 class OrderStatusUpdateRequest(BaseModel):
-    new_status: Literal["preparing", "ready", "delivered"]
+    new_status: Literal["preparing", "ready"]
     changed_by_staff_id: int | None = None
     note: str | None = None
 
@@ -688,7 +688,7 @@ def get_order_detail(order_id: int):
 @app.post("/api/orders/{order_id}/status")
 def update_order_status(order_id: int, payload: OrderStatusUpdateRequest):
     new_status = payload.new_status
-    valid_statuses = ["preparing", "ready", "delivered"]
+    valid_statuses = ["preparing", "ready"]
 
     if new_status not in valid_statuses:
         raise HTTPException(status_code=400, detail="Invalid status.")
@@ -710,7 +710,6 @@ def update_order_status(order_id: int, payload: OrderStatusUpdateRequest):
     allowed_transitions = {
         "pending": "preparing",
         "preparing": "ready",
-        "ready": "delivered"
     }
 
     if current_status not in allowed_transitions:
@@ -1591,6 +1590,30 @@ def get_table_dashboard(table_id: int):
             """,
             (session["id"],),
         )
+
+        for order in active_orders:
+            items = fetch_all(
+                """
+                SELECT
+                    oi.id,
+                    oi.menu_item_id,
+                    mi.name AS menu_item_name,
+                    oi.quantity,
+                    oi.unit_price,
+                    oi.line_total,
+                    oi.item_status,
+                    oi.created_at
+                FROM order_items oi
+                JOIN menu_items mi
+                    ON mi.id = oi.menu_item_id
+                WHERE oi.order_id = %s
+                ORDER BY oi.id;
+                """,
+                (order["id"],),
+            )
+            order["items"] = items
+
+
 
         active_calls = fetch_all(
             """

@@ -109,6 +109,9 @@ def get_menu_items():
         "data": items,
     }
 
+class MenuItemReviewCreateRequest(BaseModel):
+    rating: int = Field(..., ge=1, le=5)
+    comment: str | None = None
 
 @app.get("/api/menu-items/{menu_item_id}/reviews")
 def get_menu_item_reviews(menu_item_id: int):
@@ -130,7 +133,39 @@ def get_menu_item_reviews(menu_item_id: int):
         "data": reviews,
     }
 
+@app.post("/api/menu-items/{menu_item_id}/reviews")
+def create_menu_item_review(menu_item_id: int, payload: MenuItemReviewCreateRequest):
+    menu_item = fetch_one(
+        """
+        SELECT id, name
+        FROM menu_items
+        WHERE id = %s;
+        """,
+        (menu_item_id,),
+    )
 
+    if not menu_item:
+        raise HTTPException(status_code=404, detail="Menu item not found.")
+
+    review = fetch_one(
+        """
+        INSERT INTO menu_item_reviews (
+            menu_item_id,
+            rating,
+            comment
+        )
+        VALUES (%s, %s, %s)
+        RETURNING id, menu_item_id, rating, comment, created_at;
+        """,
+        (menu_item_id, payload.rating, payload.comment),
+    )
+
+    return {
+        "success": True,
+        "message": "Review created successfully.",
+        "data": review,
+    }
+    
 @app.post("/api/orders")
 def create_order(payload: OrderCreateRequest):
     if not payload.items:
@@ -547,6 +582,25 @@ def get_kitchen_order_detail(order_id: int):
         },
     }
 
+@app.get("/api/kitchen/ingredients")
+def get_kitchen_ingredients():
+    ingredients = fetch_all(
+        """
+        SELECT
+            id,
+            name,
+            stock_quantity,
+            unit
+        FROM ingredients
+        ORDER BY name ASC;
+        """
+    )
+
+    return {
+        "success": True,
+        "count": len(ingredients),
+        "data": ingredients,
+    }
 
 @app.post("/api/orders/{order_id}/cancel")
 def cancel_order(order_id: int):
@@ -685,6 +739,7 @@ def get_order_detail(order_id: int):
         },
     }
 
+
 @app.post("/api/orders/{order_id}/status")
 def update_order_status(order_id: int, payload: OrderStatusUpdateRequest):
     new_status = payload.new_status
@@ -719,8 +774,6 @@ def update_order_status(order_id: int, payload: OrderStatusUpdateRequest):
         raise HTTPException(status_code=400, detail="Invalid status transition.")
 
     def tx(conn, cur):
-
-        # 1️⃣ Eğer preparing'e geçiyorsa stok düş
         if new_status == "preparing":
             cur.execute(
                 """
@@ -732,12 +785,20 @@ def update_order_status(order_id: int, payload: OrderStatusUpdateRequest):
             )
             items = cur.fetchall()
 
+            required_ingredients = []
+
             for item in items:
                 cur.execute(
                     """
-                    SELECT ingredient_id, quantity_needed
-                    FROM menu_item_ingredients
-                    WHERE menu_item_id = %s;
+                    SELECT
+                        mii.ingredient_id,
+                        i.name AS ingredient_name,
+                        i.stock_quantity,
+                        mii.quantity_needed
+                    FROM menu_item_ingredients mii
+                    JOIN ingredients i
+                        ON i.id = mii.ingredient_id
+                    WHERE mii.menu_item_id = %s;
                     """,
                     (item["menu_item_id"],),
                 )
@@ -746,16 +807,32 @@ def update_order_status(order_id: int, payload: OrderStatusUpdateRequest):
                 for ing in ingredients:
                     total_needed = ing["quantity_needed"] * item["quantity"]
 
-                    cur.execute(
-                        """
-                        UPDATE ingredients
-                        SET stock_quantity = stock_quantity - %s
-                        WHERE id = %s;
-                        """,
-                        (total_needed, ing["ingredient_id"]),
+                    if ing["stock_quantity"] < total_needed:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                f"Insufficient stock for ingredient '{ing['ingredient_name']}'. "
+                                f"Required: {total_needed}, Available: {ing['stock_quantity']}."
+                            ),
+                        )
+
+                    required_ingredients.append(
+                        {
+                            "ingredient_id": ing["ingredient_id"],
+                            "total_needed": total_needed,
+                        }
                     )
 
-        # 2️⃣ Order status update
+            for req in required_ingredients:
+                cur.execute(
+                    """
+                    UPDATE ingredients
+                    SET stock_quantity = stock_quantity - %s
+                    WHERE id = %s;
+                    """,
+                    (req["total_needed"], req["ingredient_id"]),
+                )
+
         cur.execute(
             """
             UPDATE orders
@@ -766,7 +843,6 @@ def update_order_status(order_id: int, payload: OrderStatusUpdateRequest):
             (new_status, order_id),
         )
 
-        # 3️⃣ Order item status update
         cur.execute(
             """
             UPDATE order_items
@@ -776,7 +852,6 @@ def update_order_status(order_id: int, payload: OrderStatusUpdateRequest):
             (new_status, order_id),
         )
 
-        # 4️⃣ Log
         cur.execute(
             """
             INSERT INTO order_status_logs (
@@ -797,7 +872,6 @@ def update_order_status(order_id: int, payload: OrderStatusUpdateRequest):
             ),
         )
 
-        # 5️⃣ Eğer ready olduysa notification oluştur
         if new_status == "ready":
             cur.execute(
                 """
@@ -825,6 +899,10 @@ def update_order_status(order_id: int, payload: OrderStatusUpdateRequest):
         "success": True,
         "message": f"Order updated to {new_status}"
     }
+
+
+
+
 
 @app.post("/api/orders/{order_id}/deliver")
 def deliver_order(order_id: int, payload: DeliverOrderRequest):
@@ -1441,11 +1519,35 @@ def pay_order(order_id: int, payload: PayOrderRequest):
             cur.execute(
                 """
                 UPDATE payments
-                SET confirmation_pin = %s
+                SET confirmation_pin = %s,
+                    status = 'rejected'
                 WHERE id = %s;
                 """,
                 (pin, payment["id"]),
             )
+
+            cur.execute(
+                """
+                INSERT INTO notifications (
+                    recipient_staff_id,
+                    type,
+                    title,
+                    message,
+                    related_order_id,
+                    related_table_id
+                )
+                VALUES (
+                    1,
+                    'payment_rejected',
+                    'Payment Rejected',
+                    'Payment confirmation failed. Customer can request payment again.',
+                    %s,
+                    %s
+                );
+                """,
+                (order_id, order["table_id"]),
+            )
+
             return
 
         cur.execute(
@@ -1697,20 +1799,21 @@ def call_waiter(table_id: int, payload: WaiterCallCreateRequest):
         (table_id,),
     )
 
-    if not session:
-        raise HTTPException(status_code=400, detail="No active table session found.")
+    current_session_id = session["id"] if session else None
 
-    existing_pending = fetch_one(
-        """
-        SELECT id
-        FROM waiter_calls
-        WHERE session_id = %s
-          AND request_type = %s
-          AND status IN ('pending', 'seen')
-        LIMIT 1;
-        """,
-        (session["id"], payload.request_type),
-    )
+    existing_pending = None
+    if current_session_id is not None:
+        existing_pending = fetch_one(
+            """
+            SELECT id
+            FROM waiter_calls
+            WHERE session_id = %s
+              AND request_type = %s
+              AND status IN ('pending', 'seen')
+            LIMIT 1;
+            """,
+            (current_session_id, payload.request_type),
+        )
 
     if existing_pending:
         raise HTTPException(
@@ -1719,6 +1822,28 @@ def call_waiter(table_id: int, payload: WaiterCallCreateRequest):
         )
 
     def tx(conn, cur):
+        local_session_id = current_session_id
+
+        if local_session_id is None:
+            cur.execute(
+                """
+                INSERT INTO table_sessions (table_id, status)
+                VALUES (%s, 'active')
+                RETURNING id;
+                """,
+                (table_id,),
+            )
+            local_session_id = cur.fetchone()["id"]
+
+            cur.execute(
+                """
+                UPDATE restaurant_tables
+                SET status = 'occupied'
+                WHERE id = %s;
+                """,
+                (table_id,),
+            )
+
         cur.execute(
             """
             INSERT INTO waiter_calls (
@@ -1730,7 +1855,7 @@ def call_waiter(table_id: int, payload: WaiterCallCreateRequest):
             VALUES (%s, %s, %s, 'pending')
             RETURNING id, session_id, table_id, request_type, status, created_at;
             """,
-            (session["id"], table_id, payload.request_type),
+            (local_session_id, table_id, payload.request_type),
         )
         created_call = cur.fetchone()
 
@@ -1768,7 +1893,6 @@ def call_waiter(table_id: int, payload: WaiterCallCreateRequest):
         "message": "Waiter call created successfully.",
         "data": result,
     }
-
 
 
 

@@ -1519,11 +1519,35 @@ def pay_order(order_id: int, payload: PayOrderRequest):
             cur.execute(
                 """
                 UPDATE payments
-                SET confirmation_pin = %s
+                SET confirmation_pin = %s,
+                    status = 'rejected'
                 WHERE id = %s;
                 """,
                 (pin, payment["id"]),
             )
+
+            cur.execute(
+                """
+                INSERT INTO notifications (
+                    recipient_staff_id,
+                    type,
+                    title,
+                    message,
+                    related_order_id,
+                    related_table_id
+                )
+                VALUES (
+                    1,
+                    'payment_rejected',
+                    'Payment Rejected',
+                    'Payment confirmation failed. Customer can request payment again.',
+                    %s,
+                    %s
+                );
+                """,
+                (order_id, order["table_id"]),
+            )
+
             return
 
         cur.execute(

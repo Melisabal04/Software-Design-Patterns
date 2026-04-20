@@ -520,3 +520,7 @@ h1 {
   border-radius: 18px;
   background: #fffaf8;
 }
+.status-rejected {
+  background: #fde5e5;
+  color: #9c3f3f;
+}

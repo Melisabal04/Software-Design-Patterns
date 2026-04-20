@@ -143,7 +143,7 @@ export default function WaiterPage() {
                   <div className="button-row">
                     {call.status === "pending" && call.request_type === "help" && (
                         <ActionButton variant="secondary" onClick={() => markSeen(call.id)}>
-                            rejected
+                            Mark Seen
                         </ActionButton>
                         )}
                     <ActionButton variant="ghost" onClick={() => completeCall(call.id)}>

@@ -381,6 +381,12 @@ export default function CustomerPage() {
                     ))}
                   </div>
 
+                    {latestPayment?.order_id === order.id && latestPayment?.status === "rejected" && (
+                    <div className="message-box">
+                        Previous payment request was rejected. Please request payment again.
+                    </div>
+                    )}
+
                   <div className="button-row">
                     {order.status === "pending" && (
                       <ActionButton variant="ghost" onClick={() => handleCancelOrder(order.id)}>
@@ -388,10 +394,12 @@ export default function CustomerPage() {
                       </ActionButton>
                     )}
                     {order.status === "delivered" && (
-                      <ActionButton variant="secondary" onClick={() => handleRequestPayment(order.id)}>
-                        Request Payment
-                      </ActionButton>
-                    )}
+                        <ActionButton variant="secondary" onClick={() => handleRequestPayment(order.id)}>
+                            {latestPayment?.order_id === order.id && latestPayment?.status === "rejected"
+                            ? "Request Payment Again"
+                            : "Request Payment"}
+                        </ActionButton>
+                        )}
                   </div>
                 </div>
               ))}
@@ -455,6 +463,8 @@ export default function CustomerPage() {
                     placeholder="Write a short comment"
                   />
                 </Field>
+
+
 
                 <div className="button-row">
                   <ActionButton onClick={handleSubmitReview} disabled={submittingReview}>

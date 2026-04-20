@@ -28,7 +28,9 @@ export default function CustomerPage() {
   const [reviewTarget, setReviewTarget] = useState(null);
   const [reviews, setReviews] = useState([]);
   const [loadingReviews, setLoadingReviews] = useState(false);
-
+  const [reviewRating, setReviewRating] = useState("5");
+  const [reviewComment, setReviewComment] = useState("");
+  const [submittingReview, setSubmittingReview] = useState(false);
   async function loadAll() {
     try {
       setLoading(true);
@@ -120,7 +122,7 @@ export default function CustomerPage() {
       };
 
       const res = await api.createOrder(payload);
-      setMessage(`Order created. Delivery PIN: ${res.data.delivery_pin}`);
+      setMessage(`Order created. Delivery ID: ${res.data.delivery_pin}`);
       setCart([]);
       await loadAll();
     } catch (error) {
@@ -168,9 +170,33 @@ export default function CustomerPage() {
   function handleCloseReviews() {
     setReviewTarget(null);
     setReviews([]);
+    setReviewRating("5");
+    setReviewComment("");
   }
 
+  async function handleSubmitReview() {
+    if (!reviewTarget) return;
 
+    try {
+      setSubmittingReview(true);
+
+      await api.createMenuItemReview(reviewTarget.id, {
+        rating: Number(reviewRating),
+        comment: reviewComment.trim() || null,
+      });
+
+      const res = await api.getMenuItemReviews(reviewTarget.id);
+      setReviews(res.data || []);
+      setReviewComment("");
+      setReviewRating("5");
+      setMessage("Review submitted successfully.");
+      await loadAll();
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setSubmittingReview(false);
+    }
+  }
 
   async function handleCancelOrder(orderId) {
     try {
@@ -330,6 +356,20 @@ export default function CustomerPage() {
                     <StatusBadge status={order.status} />
                   </div>
 
+                <div className="order-card-info">
+                    <div>
+                        <span className="label-mini">Delivery ID</span>
+                        <strong>{order.delivery_pin || "-"}</strong>
+                    </div>
+                    <div>
+                        <span className="label-mini">Verified</span>
+                        <strong>{order.delivery_pin_verified_at || "Not yet"}</strong>
+                    </div>
+                </div>
+
+
+
+
                   <div className="order-items-list">
                     {(order.items || []).map((item) => (
                       <div key={item.id} className="order-item-line">
@@ -391,7 +431,38 @@ export default function CustomerPage() {
                 Close
               </ActionButton>
             </div>
+            <div className="review-form-box">
+              <div className="inline-form">
+                <Field label="Rating">
+                  <SelectInput
+                    value={reviewRating}
+                    onChange={setReviewRating}
+                    options={[
+                      { value: "5", label: "5" },
+                      { value: "4", label: "4" },
+                      { value: "3", label: "3" },
+                      { value: "2", label: "2" },
+                      { value: "1", label: "1" },
+                    ]}
+                  />
+                </Field>
 
+                <Field label="Comment">
+                  <input
+                    className="text-input"
+                    value={reviewComment}
+                    onChange={(e) => setReviewComment(e.target.value)}
+                    placeholder="Write a short comment"
+                  />
+                </Field>
+
+                <div className="button-row">
+                  <ActionButton onClick={handleSubmitReview} disabled={submittingReview}>
+                    {submittingReview ? "Submitting..." : "Submit Review"}
+                  </ActionButton>
+                </div>
+              </div>
+            </div>
             {loadingReviews ? (
               <EmptyState text="Loading reviews..." />
             ) : reviews.length === 0 ? (

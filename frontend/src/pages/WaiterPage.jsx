@@ -141,11 +141,11 @@ export default function WaiterPage() {
                   </div>
 
                   <div className="button-row">
-                    {call.status === "pending" && (
-                      <ActionButton variant="secondary" onClick={() => markSeen(call.id)}>
-                        Mark Seen
-                      </ActionButton>
-                    )}
+                    {call.status === "pending" && call.request_type === "help" && (
+                        <ActionButton variant="secondary" onClick={() => markSeen(call.id)}>
+                            rejected
+                        </ActionButton>
+                        )}
                     <ActionButton variant="ghost" onClick={() => completeCall(call.id)}>
                       Complete
                     </ActionButton>
@@ -173,13 +173,13 @@ export default function WaiterPage() {
                     <StatusBadge status={order.status} />
                   </div>
 
-                  <Field label="Customer Delivery PIN">
+                    <Field label="Customer Delivery ID">
                     <TextInput
                       value={deliveryPins[order.id] || ""}
                       onChange={(value) =>
                         setDeliveryPins((prev) => ({ ...prev, [order.id]: value }))
                       }
-                      placeholder="Enter delivery PIN"
+                      placeholder="Enter delivery ID"
                     />
                   </Field>
 

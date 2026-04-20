@@ -82,7 +82,7 @@ export const api = {
     request(`/kitchen/orders${status ? `?status=${status}` : ""}`),
 
   getKitchenOrderDetail: (orderId) => request(`/kitchen/orders/${orderId}`),
-
+  getKitchenIngredients: () => request("/kitchen/ingredients"),
   getWaiterDashboard: () => request("/waiter/dashboard"),
   getWaiterCalls: (params = {}) => {
     const search = new URLSearchParams();
@@ -111,5 +111,10 @@ export const api = {
   markNotificationAsRead: (notificationId) =>
     request(`/notifications/${notificationId}/read`, {
       method: "POST",
+    }),
+  createMenuItemReview: (menuItemId, payload) =>
+    request(`/menu-items/${menuItemId}/reviews`, {
+      method: "POST",
+      body: JSON.stringify(payload),
     }),
 };

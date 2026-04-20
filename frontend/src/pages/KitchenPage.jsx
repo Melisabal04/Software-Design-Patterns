@@ -17,17 +17,20 @@ export default function KitchenPage() {
   const [message, setMessage] = useState("");
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [selectedOrderDetail, setSelectedOrderDetail] = useState(null);
+  const [ingredients, setIngredients] = useState([]);
   async function loadData() {
     try {
-      const [pending, preparing, ready] = await Promise.all([
+      const [pending, preparing, ready, ingredientsRes] = await Promise.all([
         api.getKitchenOrders("pending"),
         api.getKitchenOrders("preparing"),
         api.getKitchenOrders("ready"),
+        api.getKitchenIngredients(),
       ]);
 
       setPendingOrders(pending.data || []);
       setPreparingOrders(preparing.data || []);
       setReadyOrders(ready.data || []);
+      setIngredients(ingredientsRes.data || []);
     } catch (error) {
       setMessage(error.message);
     }
@@ -119,10 +122,24 @@ export default function KitchenPage() {
             <StatCard label="Pending" value={pendingOrders.length} tone="kitchen" />
             <StatCard label="Preparing" value={preparingOrders.length} tone="kitchen" />
             <StatCard label="Ready" value={readyOrders.length} tone="kitchen" />
-            <StatCard label="Total Active" value={pendingOrders.length + preparingOrders.length + readyOrders.length} tone="kitchen" />
+            <StatCard
+              label="Total Active"
+              value={pendingOrders.length + preparingOrders.length + readyOrders.length}
+              tone="kitchen"
+            />
+          </div>
+
+          <div className="ingredient-strip">
+            {ingredients.slice(0, 8).map((ingredient) => (
+              <div key={ingredient.id} className="ingredient-pill">
+                <span>{ingredient.name}</span>
+                <strong>
+                  {ingredient.stock_quantity} {ingredient.unit}
+                </strong>
+              </div>
+            ))}
           </div>
         </PanelCard>
-
         <div className="triple-grid">
           <PanelCard title="Pending Orders" hint="Orders waiting to be started">
             {pendingOrders.length === 0 ? (

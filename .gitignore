@@ -1,0 +1,4 @@
+/backend/app/venv
+*.pyc
+/backend
+backend/.env

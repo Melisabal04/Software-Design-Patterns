@@ -1,12 +1,13 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Literal
+import random
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from app.database import execute_transaction, fetch_all, fetch_one
+from app.database import execute_query, execute_transaction, fetch_all, fetch_one
 
 app = FastAPI(title="Restway Backend", version="1.0.0")
 
@@ -17,7 +18,38 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+VALID_ORDER_STATUSES = {"pending", "preparing", "ready", "delivered", "paid", "cancelled"}
+VALID_WAITER_CALL_TYPES = {"help", "payment"}
+VALID_WAITER_CALL_STATUSES = {"pending", "seen", "completed"}
 
+
+def generate_delivery_pin() -> str:
+    return f"{random.randint(1000, 9999)}"
+
+
+class WaiterCallCreateRequest(BaseModel):
+    request_type: Literal["help", "payment"]
+
+
+class OrderStatusUpdateRequest(BaseModel):
+    new_status: Literal["preparing", "ready", "delivered"]
+    changed_by_staff_id: int | None = None
+    note: str | None = None
+
+
+class DeliverOrderRequest(BaseModel):
+    waiter_id: int
+    delivery_pin: str
+
+
+class PayOrderRequest(BaseModel):
+    waiter_id: int
+    pin: str
+    payment_method: Literal["card", "cash"] = "card"
+
+
+class WaiterCallActionRequest(BaseModel):
+    staff_id: int
 
 class OrderItemCreate(BaseModel):
     menu_item_id: int
@@ -194,7 +226,7 @@ def create_order(payload: OrderCreateRequest):
                 (payload.table_id,),
             )
             session_id = cur.fetchone()["id"]
-
+        delivery_pin = generate_delivery_pin()
         total_amount = Decimal("0.00")
         order_lines: list[dict] = []
 
@@ -226,7 +258,8 @@ def create_order(payload: OrderCreateRequest):
                 created_by_staff_id,
                 status,
                 total_amount,
-                cancel_deadline
+                cancel_deadline,
+                delivery_pin
             )
             VALUES (
                 %s,
@@ -237,9 +270,10 @@ def create_order(payload: OrderCreateRequest):
                 %s,
                 'pending',
                 %s,
-                CURRENT_TIMESTAMP + INTERVAL '5 minutes'
+                CURRENT_TIMESTAMP + INTERVAL '5 minutes',
+                %s
             )
-            RETURNING id, created_at, cancel_deadline;
+            RETURNING id, created_at, cancel_deadline, delivery_pin;
             """,
             (
                 session_id,
@@ -249,8 +283,10 @@ def create_order(payload: OrderCreateRequest):
                 payload.created_by_type,
                 payload.created_by_staff_id,
                 total_amount,
+                delivery_pin,
             ),
         )
+
         created_order = cur.fetchone()
         order_id = created_order["id"]
 
@@ -334,6 +370,8 @@ def create_order(payload: OrderCreateRequest):
             "total_amount": float(total_amount),
             "created_at": created_order["created_at"],
             "cancel_deadline": created_order["cancel_deadline"],
+            "delivery_pin": created_order["delivery_pin"],
+            "delivery_pin_verified_at": None,
             "items": created_items,
         }
 
@@ -393,6 +431,120 @@ def get_session_orders(session_id: int):
         "success": True,
         "count": len(orders),
         "data": orders,
+    }
+
+@app.get("/api/kitchen/orders")
+def get_kitchen_orders(status: str | None = None):
+    allowed_statuses = {"pending", "preparing", "ready"}
+
+    if status is not None and status not in allowed_statuses:
+        raise HTTPException(status_code=400, detail="Invalid kitchen order status filter.")
+
+    query = """
+        SELECT
+            o.id,
+            o.session_id,
+            o.table_id,
+            rt.table_number,
+            o.order_number,
+            o.order_type,
+            o.created_by_type,
+            o.status,
+            o.total_amount,
+            o.delivery_pin,
+            o.delivery_pin_verified_at,
+            o.created_at,
+            o.updated_at,
+            COUNT(oi.id) AS item_count
+        FROM orders o
+        JOIN restaurant_tables rt
+            ON rt.id = o.table_id
+        LEFT JOIN order_items oi
+            ON oi.order_id = o.id
+        WHERE o.status IN ('pending', 'preparing', 'ready')
+    """
+
+    params = []
+
+    if status is not None:
+        query += " AND o.status = %s"
+        params.append(status)
+
+    query += """
+        GROUP BY
+            o.id, o.session_id, o.table_id, rt.table_number,
+            o.order_number, o.order_type, o.created_by_type,
+            o.status, o.total_amount, o.delivery_pin,
+            o.delivery_pin_verified_at, o.created_at, o.updated_at
+        ORDER BY o.created_at ASC;
+    """
+
+    orders = fetch_all(query, tuple(params))
+
+    return {
+        "success": True,
+        "count": len(orders),
+        "data": orders,
+    }
+
+
+@app.get("/api/kitchen/orders/{order_id}")
+def get_kitchen_order_detail(order_id: int):
+    order = fetch_one(
+        """
+        SELECT
+            o.id,
+            o.session_id,
+            o.table_id,
+            rt.table_number,
+            o.order_number,
+            o.order_type,
+            o.created_by_type,
+            o.created_by_staff_id,
+            o.status,
+            o.total_amount,
+            o.cancel_deadline,
+            o.delivery_pin,
+            o.delivery_pin_verified_at,
+            o.created_at,
+            o.updated_at
+        FROM orders o
+        JOIN restaurant_tables rt
+            ON rt.id = o.table_id
+        WHERE o.id = %s;
+        """,
+        (order_id,),
+    )
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
+
+    items = fetch_all(
+        """
+        SELECT
+            oi.id,
+            oi.menu_item_id,
+            mi.name AS menu_item_name,
+            oi.quantity,
+            oi.unit_price,
+            oi.line_total,
+            oi.item_status,
+            oi.created_at
+        FROM order_items oi
+        JOIN menu_items mi
+            ON mi.id = oi.menu_item_id
+        WHERE oi.order_id = %s
+        ORDER BY oi.id;
+        """,
+        (order_id,),
+    )
+
+    return {
+        "success": True,
+        "data": {
+            **order,
+            "items": items,
+        },
     }
 
 
@@ -492,6 +644,8 @@ def get_order_detail(order_id: int):
             status,
             total_amount,
             cancel_deadline,
+            delivery_pin,
+            delivery_pin_verified_at,
             created_at,
             updated_at
         FROM orders
@@ -532,7 +686,8 @@ def get_order_detail(order_id: int):
     }
 
 @app.post("/api/orders/{order_id}/status")
-def update_order_status(order_id: int, new_status: str):
+def update_order_status(order_id: int, payload: OrderStatusUpdateRequest):
+    new_status = payload.new_status
     valid_statuses = ["preparing", "ready", "delivered"]
 
     if new_status not in valid_statuses:
@@ -629,11 +784,18 @@ def update_order_status(order_id: int, new_status: str):
                 order_id,
                 old_status,
                 new_status,
+                changed_by_staff_id,
                 note
             )
-            VALUES (%s, %s, %s, %s);
+            VALUES (%s, %s, %s, %s, %s);
             """,
-            (order_id, current_status, new_status, "Status updated"),
+            (
+                order_id,
+                current_status,
+                new_status,
+                payload.changed_by_staff_id,
+                payload.note or "Status updated",
+            ),
         )
 
         # 5️⃣ Eğer ready olduysa notification oluştur
@@ -666,11 +828,13 @@ def update_order_status(order_id: int, new_status: str):
     }
 
 @app.post("/api/orders/{order_id}/deliver")
-def deliver_order(order_id: int, waiter_id: int, pin: str):
+def deliver_order(order_id: int, payload: DeliverOrderRequest):
+    waiter_id = payload.waiter_id
+    delivery_pin = payload.delivery_pin
 
     order = fetch_one(
         """
-        SELECT id, status
+        SELECT id, status, delivery_pin
         FROM orders
         WHERE id = %s;
         """,
@@ -701,7 +865,7 @@ def deliver_order(order_id: int, waiter_id: int, pin: str):
     if not waiter["is_active"]:
         raise HTTPException(status_code=400, detail="Waiter is not active.")
 
-    is_correct = waiter["pin_code"] == pin
+    is_correct = order["delivery_pin"] == delivery_pin
 
     def tx(conn, cur):
 
@@ -716,7 +880,7 @@ def deliver_order(order_id: int, waiter_id: int, pin: str):
             )
             VALUES (%s, %s, %s, %s);
             """,
-            (order_id, waiter_id, pin, is_correct),
+            (order_id, waiter_id, delivery_pin, is_correct),
         )
 
         if not is_correct:
@@ -727,6 +891,7 @@ def deliver_order(order_id: int, waiter_id: int, pin: str):
             """
             UPDATE orders
             SET status = 'delivered',
+                delivery_pin_verified_at = CURRENT_TIMESTAMP,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = %s;
             """,
@@ -760,7 +925,7 @@ def deliver_order(order_id: int, waiter_id: int, pin: str):
     execute_transaction(tx)
 
     if not is_correct:
-        raise HTTPException(status_code=400, detail="Invalid PIN.")
+        raise HTTPException(status_code=400, detail="Invalid delivery PIN.")
 
     return {
         "success": True,
@@ -882,8 +1047,336 @@ def request_payment(order_id: int):
         "data": result,
     }
 
+@app.get("/api/waiter/dashboard")
+def get_waiter_dashboard():
+    pending_calls = fetch_all(
+        """
+        SELECT
+            wc.id,
+            wc.session_id,
+            wc.table_id,
+            rt.table_number,
+            wc.request_type,
+            wc.status,
+            wc.created_at,
+            wc.handled_by_staff_id,
+            wc.handled_at
+        FROM waiter_calls wc
+        JOIN restaurant_tables rt
+            ON rt.id = wc.table_id
+        WHERE wc.status IN ('pending', 'seen')
+        ORDER BY wc.created_at ASC;
+        """
+    )
+
+    ready_orders = fetch_all(
+        """
+        SELECT
+            o.id,
+            o.session_id,
+            o.table_id,
+            rt.table_number,
+            o.order_number,
+            o.order_type,
+            o.status,
+            o.total_amount,
+            o.delivery_pin,
+            o.delivery_pin_verified_at,
+            o.created_at,
+            o.updated_at
+        FROM orders o
+        JOIN restaurant_tables rt
+            ON rt.id = o.table_id
+        WHERE o.status = 'ready'
+        ORDER BY o.created_at ASC;
+        """
+    )
+
+    pending_payments = fetch_all(
+        """
+        SELECT
+            p.id,
+            p.order_id,
+            p.session_id,
+            p.table_id,
+            rt.table_number,
+            p.payment_method,
+            p.status,
+            p.amount,
+            p.confirmed_by_waiter_id,
+            p.confirmation_pin,
+            p.paid_at,
+            p.created_at
+        FROM payments p
+        JOIN restaurant_tables rt
+            ON rt.id = p.table_id
+        WHERE p.status = 'pending'
+        ORDER BY p.created_at ASC;
+        """
+    )
+
+    unread_notifications = fetch_all(
+        """
+        SELECT
+            id,
+            recipient_staff_id,
+            type,
+            title,
+            message,
+            related_order_id,
+            related_table_id,
+            is_read,
+            created_at
+        FROM notifications
+        WHERE is_read = FALSE
+        ORDER BY created_at DESC;
+        """
+    )
+
+    return {
+        "success": True,
+        "data": {
+            "pending_calls": pending_calls,
+            "ready_orders": ready_orders,
+            "pending_payments": pending_payments,
+            "unread_notifications": unread_notifications,
+        },
+    }
+
+
+@app.get("/api/waiter/calls")
+def get_waiter_calls(status: str | None = None, request_type: str | None = None):
+    query = """
+        SELECT
+            wc.id,
+            wc.session_id,
+            wc.table_id,
+            rt.table_number,
+            wc.request_type,
+            wc.status,
+            wc.created_at,
+            wc.handled_by_staff_id,
+            wc.handled_at
+        FROM waiter_calls wc
+        JOIN restaurant_tables rt
+            ON rt.id = wc.table_id
+        WHERE 1=1
+    """
+    params = []
+
+    if status:
+        if status not in VALID_WAITER_CALL_STATUSES:
+            raise HTTPException(status_code=400, detail="Invalid waiter call status.")
+        query += " AND wc.status = %s"
+        params.append(status)
+
+    if request_type:
+        if request_type not in VALID_WAITER_CALL_TYPES:
+            raise HTTPException(status_code=400, detail="Invalid waiter call type.")
+        query += " AND wc.request_type = %s"
+        params.append(request_type)
+
+    query += " ORDER BY wc.created_at ASC;"
+
+    calls = fetch_all(query, tuple(params))
+
+    return {
+        "success": True,
+        "count": len(calls),
+        "data": calls,
+    }
+
+
+@app.post("/api/waiter/calls/{call_id}/seen")
+def mark_waiter_call_seen(call_id: int, payload: WaiterCallActionRequest):
+    call = fetch_one(
+        """
+        SELECT id, status
+        FROM waiter_calls
+        WHERE id = %s;
+        """,
+        (call_id,),
+    )
+
+    if not call:
+        raise HTTPException(status_code=404, detail="Waiter call not found.")
+
+    if call["status"] == "completed":
+        raise HTTPException(status_code=400, detail="Completed waiter call cannot be changed.")
+
+    execute_query(
+        """
+        UPDATE waiter_calls
+        SET status = 'seen',
+            handled_by_staff_id = %s
+        WHERE id = %s;
+        """,
+        (payload.staff_id, call_id),
+    )
+
+    return {
+        "success": True,
+        "message": "Waiter call marked as seen.",
+    }
+
+
+@app.post("/api/waiter/calls/{call_id}/complete")
+def complete_waiter_call(call_id: int, payload: WaiterCallActionRequest):
+    call = fetch_one(
+        """
+        SELECT id, status
+        FROM waiter_calls
+        WHERE id = %s;
+        """,
+        (call_id,),
+    )
+
+    if not call:
+        raise HTTPException(status_code=404, detail="Waiter call not found.")
+
+    if call["status"] == "completed":
+        raise HTTPException(status_code=400, detail="Waiter call already completed.")
+
+    execute_query(
+        """
+        UPDATE waiter_calls
+        SET status = 'completed',
+            handled_by_staff_id = %s,
+            handled_at = CURRENT_TIMESTAMP
+        WHERE id = %s;
+        """,
+        (payload.staff_id, call_id),
+    )
+
+    return {
+        "success": True,
+        "message": "Waiter call completed successfully.",
+    }
+
+
+@app.get("/api/waiter/orders-ready")
+def get_waiter_ready_orders():
+    orders = fetch_all(
+        """
+        SELECT
+            o.id,
+            o.session_id,
+            o.table_id,
+            rt.table_number,
+            o.order_number,
+            o.order_type,
+            o.status,
+            o.total_amount,
+            o.delivery_pin,
+            o.delivery_pin_verified_at,
+            o.created_at,
+            o.updated_at
+        FROM orders o
+        JOIN restaurant_tables rt
+            ON rt.id = o.table_id
+        WHERE o.status = 'ready'
+        ORDER BY o.created_at ASC;
+        """
+    )
+
+    return {
+        "success": True,
+        "count": len(orders),
+        "data": orders,
+    }
+
+
+@app.get("/api/waiter/payments-pending")
+def get_waiter_pending_payments():
+    payments = fetch_all(
+        """
+        SELECT
+            p.id,
+            p.order_id,
+            p.session_id,
+            p.table_id,
+            rt.table_number,
+            p.payment_method,
+            p.status,
+            p.amount,
+            p.confirmed_by_waiter_id,
+            p.confirmation_pin,
+            p.paid_at,
+            p.created_at
+        FROM payments p
+        JOIN restaurant_tables rt
+            ON rt.id = p.table_id
+        WHERE p.status = 'pending'
+        ORDER BY p.created_at ASC;
+        """
+    )
+
+    return {
+        "success": True,
+        "count": len(payments),
+        "data": payments,
+    }
+
+@app.get("/api/staff/{staff_id}/notifications")
+def get_staff_notifications(staff_id: int):
+    notifications = fetch_all(
+        """
+        SELECT
+            id,
+            recipient_staff_id,
+            type,
+            title,
+            message,
+            related_order_id,
+            related_table_id,
+            is_read,
+            created_at
+        FROM notifications
+        WHERE recipient_staff_id = %s
+        ORDER BY created_at DESC;
+        """,
+        (staff_id,),
+    )
+
+    return {
+        "success": True,
+        "count": len(notifications),
+        "data": notifications,
+    }
+
+
+@app.post("/api/notifications/{notification_id}/read")
+def mark_notification_as_read(notification_id: int):
+    notification = fetch_one(
+        """
+        SELECT id
+        FROM notifications
+        WHERE id = %s;
+        """,
+        (notification_id,),
+    )
+
+    if not notification:
+        raise HTTPException(status_code=404, detail="Notification not found.")
+
+    execute_query(
+        """
+        UPDATE notifications
+        SET is_read = TRUE
+        WHERE id = %s;
+        """,
+        (notification_id,),
+    )
+
+    return {
+        "success": True,
+        "message": "Notification marked as read.",
+    }
 @app.post("/api/orders/{order_id}/pay")
-def pay_order(order_id: int, waiter_id: int, pin: str, payment_method: str = "card"):
+def pay_order(order_id: int, payload: PayOrderRequest):
+    waiter_id = payload.waiter_id
+    pin = payload.pin
+    payment_method = payload.payment_method
     if payment_method not in ["card", "cash"]:
         raise HTTPException(status_code=400, detail="Invalid payment method.")
 
@@ -1034,6 +1527,228 @@ def pay_order(order_id: int, waiter_id: int, pin: str, payment_method: str = "ca
         "message": "Payment completed successfully.",
     }
 
+
+@app.get("/api/tables/{table_id}/dashboard")
+def get_table_dashboard(table_id: int):
+    table = fetch_one(
+        """
+        SELECT
+            id,
+            table_number,
+            name,
+            status,
+            created_at
+        FROM restaurant_tables
+        WHERE id = %s;
+        """,
+        (table_id,),
+    )
+
+    if not table:
+        raise HTTPException(status_code=404, detail="Table not found.")
+
+    session = fetch_one(
+        """
+        SELECT
+            id,
+            table_id,
+            started_at,
+            ended_at,
+            status
+        FROM table_sessions
+        WHERE table_id = %s
+          AND status = 'active'
+        ORDER BY started_at DESC
+        LIMIT 1;
+        """,
+        (table_id,),
+    )
+
+    active_orders = []
+    active_calls = []
+    latest_payment = None
+
+    if session:
+        active_orders = fetch_all(
+            """
+            SELECT
+                o.id,
+                o.order_number,
+                o.order_type,
+                o.created_by_type,
+                o.created_by_staff_id,
+                o.status,
+                o.total_amount,
+                o.cancel_deadline,
+                o.delivery_pin,
+                o.delivery_pin_verified_at,
+                o.created_at,
+                o.updated_at
+            FROM orders o
+            WHERE o.session_id = %s
+              AND o.status IN ('pending', 'preparing', 'ready', 'delivered')
+            ORDER BY o.created_at DESC;
+            """,
+            (session["id"],),
+        )
+
+        active_calls = fetch_all(
+            """
+            SELECT
+                wc.id,
+                wc.session_id,
+                wc.table_id,
+                wc.request_type,
+                wc.status,
+                wc.created_at,
+                wc.handled_by_staff_id,
+                wc.handled_at
+            FROM waiter_calls wc
+            WHERE wc.session_id = %s
+              AND wc.status IN ('pending', 'seen')
+            ORDER BY wc.created_at DESC;
+            """,
+            (session["id"],),
+        )
+
+        latest_payment = fetch_one(
+            """
+            SELECT
+                p.id,
+                p.order_id,
+                p.session_id,
+                p.table_id,
+                p.payment_method,
+                p.status,
+                p.amount,
+                p.confirmed_by_waiter_id,
+                p.confirmation_pin,
+                p.paid_at,
+                p.created_at
+            FROM payments p
+            WHERE p.session_id = %s
+            ORDER BY p.created_at DESC
+            LIMIT 1;
+            """,
+            (session["id"],),
+        )
+
+    return {
+        "success": True,
+        "data": {
+            "table": table,
+            "active_session": session,
+            "active_orders": active_orders,
+            "active_waiter_calls": active_calls,
+            "latest_payment": latest_payment,
+        },
+    }
+
+
+@app.post("/api/tables/{table_id}/call-waiter")
+def call_waiter(table_id: int, payload: WaiterCallCreateRequest):
+    if payload.request_type not in VALID_WAITER_CALL_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid waiter call type.")
+
+    table = fetch_one(
+        """
+        SELECT id, table_number, status
+        FROM restaurant_tables
+        WHERE id = %s;
+        """,
+        (table_id,),
+    )
+
+    if not table:
+        raise HTTPException(status_code=404, detail="Table not found.")
+
+    session = fetch_one(
+        """
+        SELECT id, table_id, status
+        FROM table_sessions
+        WHERE table_id = %s
+          AND status = 'active'
+        ORDER BY started_at DESC
+        LIMIT 1;
+        """,
+        (table_id,),
+    )
+
+    if not session:
+        raise HTTPException(status_code=400, detail="No active table session found.")
+
+    existing_pending = fetch_one(
+        """
+        SELECT id
+        FROM waiter_calls
+        WHERE session_id = %s
+          AND request_type = %s
+          AND status IN ('pending', 'seen')
+        LIMIT 1;
+        """,
+        (session["id"], payload.request_type),
+    )
+
+    if existing_pending:
+        raise HTTPException(
+            status_code=400,
+            detail=f"An active '{payload.request_type}' waiter call already exists.",
+        )
+
+    def tx(conn, cur):
+        cur.execute(
+            """
+            INSERT INTO waiter_calls (
+                session_id,
+                table_id,
+                request_type,
+                status
+            )
+            VALUES (%s, %s, %s, 'pending')
+            RETURNING id, session_id, table_id, request_type, status, created_at;
+            """,
+            (session["id"], table_id, payload.request_type),
+        )
+        created_call = cur.fetchone()
+
+        cur.execute(
+            """
+            INSERT INTO notifications (
+                recipient_staff_id,
+                type,
+                title,
+                message,
+                related_table_id
+            )
+            VALUES (
+                1,
+                %s,
+                %s,
+                %s,
+                %s
+            );
+            """,
+            (
+                f"waiter_call_{payload.request_type}",
+                "Waiter Call",
+                f"Table {table['table_number']} requested {payload.request_type}.",
+                table_id,
+            ),
+        )
+
+        return created_call
+
+    result = execute_transaction(tx)
+
+    return {
+        "success": True,
+        "message": "Waiter call created successfully.",
+        "data": result,
+    }
+
+
+
+
 @app.get("/api/tables/{table_id}")
 def get_table_detail(table_id: int):
     table = fetch_one(
@@ -1057,3 +1772,5 @@ def get_table_detail(table_id: int):
         "success": True,
         "data": table,
     }
+
+

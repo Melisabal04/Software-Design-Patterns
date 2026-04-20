@@ -2,3 +2,5 @@
 *.pyc
 /backend
 backend/.env
+backend/.env
+*.pyc

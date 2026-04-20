@@ -134,7 +134,7 @@ export default function CustomerPage() {
 
   async function handleCallWaiter() {
     try {
-      await api.callWaiter(tableId, { request_type: "help" });
+      await api.callWaiter(tableId, { request_type: "general_help" });
       setMessage("Waiter called successfully.");
       await loadAll();
     } catch (error) {
@@ -237,7 +237,6 @@ export default function CustomerPage() {
               />
             </Field>
             <div className="button-row">
-              <ActionButton onClick={loadAll}>Refresh</ActionButton>
               <ActionButton variant="secondary" onClick={handleCallWaiter}>
                 Call Waiter
               </ActionButton>
@@ -356,16 +355,18 @@ export default function CustomerPage() {
                     <StatusBadge status={order.status} />
                   </div>
 
-                <div className="order-card-info">
+                {order.status !== "delivered" && order.status !== "paid" && (
+                  <div className="order-card-info">
                     <div>
-                        <span className="label-mini">Delivery ID</span>
-                        <strong>{order.delivery_pin || "-"}</strong>
+                      <span className="label-mini">Delivery ID</span>
+                      <strong>{order.delivery_pin || "-"}</strong>
                     </div>
                     <div>
-                        <span className="label-mini">Verified</span>
-                        <strong>{order.delivery_pin_verified_at || "Not yet"}</strong>
+                      <span className="label-mini">Verified</span>
+                      <strong>{order.delivery_pin_verified_at || "Not yet"}</strong>
                     </div>
-                </div>
+                  </div>
+                )}
 
 
 
@@ -416,7 +417,13 @@ export default function CustomerPage() {
                 <div key={call.id} className="order-card">
                   <div className="list-row">
                     <div>
-                      <h3>{call.request_type === "payment" ? "Payment Request" : "Help Request"}</h3>
+                      <h3>
+                        {call.request_type === "payment"
+                          ? "Payment Request"
+                          : call.request_type === "order_help"
+                          ? "Order Help Request"
+                          : "General Help Request"}
+                      </h3>
                       <p className="muted">Created at: {call.created_at}</p>
                     </div>
                     <StatusBadge status={call.status} />

@@ -4,10 +4,12 @@ import {
   ActionButton,
   AppShell,
   EmptyState,
+  Field,
   NavPills,
   PanelCard,
   StatCard,
   StatusBadge,
+  TextInput,
 } from "../components/common";
 
 export default function KitchenPage() {
@@ -18,6 +20,10 @@ export default function KitchenPage() {
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [selectedOrderDetail, setSelectedOrderDetail] = useState(null);
   const [ingredients, setIngredients] = useState([]);
+    const [ingredientName, setIngredientName] = useState("");
+  const [ingredientStock, setIngredientStock] = useState("0");
+  const [ingredientUnit, setIngredientUnit] = useState("");
+  const [submittingIngredient, setSubmittingIngredient] = useState(false);
   async function loadData() {
     try {
       const [pending, preparing, ready, ingredientsRes] = await Promise.all([
@@ -48,6 +54,28 @@ export default function KitchenPage() {
   function closeOrderDetail() {
     setSelectedOrder(null);
     setSelectedOrderDetail(null);
+  }
+
+  async function handleCreateIngredient() {
+    try {
+      setSubmittingIngredient(true);
+
+      await api.createKitchenIngredient({
+        name: ingredientName,
+        stock_quantity: Number(ingredientStock),
+        unit: ingredientUnit,
+      });
+
+      setIngredientName("");
+      setIngredientStock("0");
+      setIngredientUnit("");
+      setMessage("Ingredient created successfully.");
+      await loadData();
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setSubmittingIngredient(false);
+    }
   }
 
   useEffect(() => {
@@ -127,6 +155,40 @@ export default function KitchenPage() {
               value={pendingOrders.length + preparingOrders.length + readyOrders.length}
               tone="kitchen"
             />
+          </div>
+
+          <div className="ingredient-create-box">
+            <div className="inline-form">
+              <Field label="Ingredient Name">
+                <TextInput
+                  value={ingredientName}
+                  onChange={setIngredientName}
+                  placeholder="e.g. Cheese"
+                />
+              </Field>
+
+              <Field label="Stock Quantity">
+                <TextInput
+                  value={ingredientStock}
+                  onChange={setIngredientStock}
+                  placeholder="e.g. 10"
+                />
+              </Field>
+
+              <Field label="Unit">
+                <TextInput
+                  value={ingredientUnit}
+                  onChange={setIngredientUnit}
+                  placeholder="e.g. kg / pcs / l"
+                />
+              </Field>
+
+              <div className="button-row">
+                <ActionButton onClick={handleCreateIngredient} disabled={submittingIngredient}>
+                  {submittingIngredient ? "Adding..." : "Add Ingredient"}
+                </ActionButton>
+              </div>
+            </div>
           </div>
 
           <div className="ingredient-strip">

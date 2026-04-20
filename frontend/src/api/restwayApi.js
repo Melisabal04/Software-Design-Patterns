@@ -83,7 +83,13 @@ export const api = {
 
   getKitchenOrderDetail: (orderId) => request(`/kitchen/orders/${orderId}`),
   getKitchenIngredients: () => request("/kitchen/ingredients"),
+  createKitchenIngredient: (payload) =>
+    request("/kitchen/ingredients", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   getWaiterDashboard: () => request("/waiter/dashboard"),
+
   getWaiterCalls: (params = {}) => {
     const search = new URLSearchParams();
     if (params.status) search.set("status", params.status);

@@ -107,12 +107,14 @@ export default function WaiterPage() {
             <Field label="Waiter ID">
               <TextInput value={waiterId} onChange={setWaiterId} placeholder="1" />
             </Field>
+
             <Field label="Waiter PIN">
-              <TextInput value={waiterPin} onChange={setWaiterPin} placeholder="Waiter PIN for payment" />
+              <TextInput
+                value={waiterPin}
+                onChange={setWaiterPin}
+                placeholder="Waiter PIN for payment"
+              />
             </Field>
-            <div className="button-row">
-              <ActionButton onClick={loadData}>Refresh</ActionButton>
-            </div>
           </div>
 
           {message ? <div className="message-box">{message}</div> : null}
@@ -135,20 +137,30 @@ export default function WaiterPage() {
                   <div className="list-row">
                     <div>
                       <h3>Table {call.table_number}</h3>
-                      <p className="muted">Request: {call.request_type}</p>
+                      <p className="muted">
+                        Request:{" "}
+                        {call.request_type === "payment"
+                          ? "Payment"
+                          : call.request_type === "order_help"
+                          ? "Order Help"
+                          : "General Help"}
+                      </p>
                     </div>
                     <StatusBadge status={call.status} />
                   </div>
 
                   <div className="button-row">
-                    {call.status === "pending" && call.request_type === "help" && (
-                        <ActionButton variant="secondary" onClick={() => markSeen(call.id)}>
-                            Mark Seen
-                        </ActionButton>
-                        )}
-                    <ActionButton variant="ghost" onClick={() => completeCall(call.id)}>
-                      Complete
-                    </ActionButton>
+                    {call.request_type !== "payment" && call.status === "pending" && (
+                      <ActionButton variant="secondary" onClick={() => markSeen(call.id)}>
+                        Mark Seen
+                      </ActionButton>
+                    )}
+
+                    {call.request_type !== "payment" && (
+                      <ActionButton variant="ghost" onClick={() => completeCall(call.id)}>
+                        Complete
+                      </ActionButton>
+                    )}
                   </div>
                 </div>
               ))}

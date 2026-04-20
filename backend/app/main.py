@@ -19,7 +19,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 VALID_ORDER_STATUSES = {"pending", "preparing", "ready", "delivered", "paid", "cancelled"}
-VALID_WAITER_CALL_TYPES = {"help", "payment"}
+VALID_WAITER_CALL_TYPES = {"general_help", "order_help", "payment"}
 VALID_WAITER_CALL_STATUSES = {"pending", "seen", "completed"}
 
 
@@ -28,8 +28,7 @@ def generate_delivery_pin() -> str:
 
 
 class WaiterCallCreateRequest(BaseModel):
-    request_type: Literal["help", "payment"]
-
+    request_type: Literal["general_help", "order_help", "payment"]
 
 class OrderStatusUpdateRequest(BaseModel):
     new_status: Literal["preparing", "ready"]
@@ -112,6 +111,11 @@ def get_menu_items():
 class MenuItemReviewCreateRequest(BaseModel):
     rating: int = Field(..., ge=1, le=5)
     comment: str | None = None
+
+class IngredientCreateRequest(BaseModel):
+    name: str
+    stock_quantity: float = Field(..., ge=0)
+    unit: str
 
 @app.get("/api/menu-items/{menu_item_id}/reviews")
 def get_menu_item_reviews(menu_item_id: int):
@@ -1195,18 +1199,22 @@ def get_waiter_dashboard():
     unread_notifications = fetch_all(
         """
         SELECT
-            id,
-            recipient_staff_id,
-            type,
-            title,
-            message,
-            related_order_id,
-            related_table_id,
-            is_read,
-            created_at
-        FROM notifications
-        WHERE is_read = FALSE
-        ORDER BY created_at DESC;
+            n.id,
+            n.recipient_staff_id,
+            n.type,
+            n.title,
+            n.message,
+            n.related_order_id,
+            n.related_table_id,
+            n.is_read,
+            n.created_at
+        FROM notifications n
+        JOIN staff_users s
+            ON s.id = n.recipient_staff_id
+        WHERE n.is_read = FALSE
+          AND s.role = 'waiter'
+          AND s.is_active = TRUE
+        ORDER BY n.created_at DESC;
         """
     )
 
@@ -1861,28 +1869,33 @@ def call_waiter(table_id: int, payload: WaiterCallCreateRequest):
 
         cur.execute(
             """
-            INSERT INTO notifications (
-                recipient_staff_id,
-                type,
-                title,
-                message,
-                related_table_id
-            )
-            VALUES (
-                1,
-                %s,
-                %s,
-                %s,
-                %s
-            );
-            """,
-            (
-                f"waiter_call_{payload.request_type}",
-                "Waiter Call",
-                f"Table {table['table_number']} requested {payload.request_type}.",
-                table_id,
-            ),
+            SELECT id
+            FROM staff_users
+            WHERE role = 'waiter' AND is_active = TRUE;
+            """
         )
+        active_waiters = cur.fetchall()
+
+        for waiter in active_waiters:
+            cur.execute(
+                """
+                INSERT INTO notifications (
+                    recipient_staff_id,
+                    type,
+                    title,
+                    message,
+                    related_table_id
+                )
+                VALUES (%s, %s, %s, %s, %s);
+                """,
+                (
+                    waiter["id"],
+                    "waiter_call",
+                    "Waiter Call",
+                    f"Table {table['table_number']} requested {payload.request_type}.",
+                    table_id,
+                ),
+            )
 
         return created_call
 
@@ -1921,3 +1934,59 @@ def get_table_detail(table_id: int):
     }
 
 
+@app.post("/api/kitchen/ingredients")
+def create_kitchen_ingredient(payload: IngredientCreateRequest):
+    name = payload.name.strip()
+    unit = payload.unit.strip()
+
+    if not name:
+        raise HTTPException(status_code=400, detail="Ingredient name is required.")
+
+    if not unit:
+        raise HTTPException(status_code=400, detail="Ingredient unit is required.")
+
+    existing = fetch_one(
+        """
+        SELECT id, name, stock_quantity, unit
+        FROM ingredients
+        WHERE LOWER(name) = LOWER(%s);
+        """,
+        (name,),
+    )
+
+    if existing:
+        updated = fetch_one(
+            """
+            UPDATE ingredients
+            SET stock_quantity = stock_quantity + %s,
+                unit = %s
+            WHERE id = %s
+            RETURNING id, name, stock_quantity, unit;
+            """,
+            (payload.stock_quantity, unit, existing["id"]),
+        )
+
+        return {
+            "success": True,
+            "message": "Ingredient stock updated successfully.",
+            "data": updated,
+        }
+
+    created = fetch_one(
+        """
+        INSERT INTO ingredients (
+            name,
+            stock_quantity,
+            unit
+        )
+        VALUES (%s, %s, %s)
+        RETURNING id, name, stock_quantity, unit;
+        """,
+        (name, payload.stock_quantity, unit),
+    )
+
+    return {
+        "success": True,
+        "message": "Ingredient created successfully.",
+        "data": created,
+    }

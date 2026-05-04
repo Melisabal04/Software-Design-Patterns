@@ -192,7 +192,7 @@ export default function KitchenPage() {
           </div>
 
           <div className="ingredient-strip">
-            {ingredients.slice(0, 8).map((ingredient) => (
+            {ingredients.map((ingredient) => (
               <div key={ingredient.id} className="ingredient-pill">
                 <span>{ingredient.name}</span>
                 <strong>

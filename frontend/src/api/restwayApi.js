@@ -118,9 +118,9 @@ export const api = {
     request(`/notifications/${notificationId}/read`, {
       method: "POST",
     }),
-  createMenuItemReview: (menuItemId, payload) =>
-    request(`/menu-items/${menuItemId}/reviews`, {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
+  createOrderItemReview: (orderId, menuItemId, payload) =>
+  request(`/orders/${orderId}/items/${menuItemId}/review`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }),
 };

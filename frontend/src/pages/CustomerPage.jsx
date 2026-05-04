@@ -49,7 +49,7 @@ export default function CustomerPage() {
 
   useEffect(() => {
     loadAll();
-    const timer = setInterval(loadAll, 6000);
+    const timer = setInterval(loadAll, 15000);
     return () => clearInterval(timer);
   }, [tableId]);
 
@@ -152,10 +152,12 @@ export default function CustomerPage() {
     }
   }
 
-  async function handleOpenReviews(menuItem) {
+  async function handleOpenReviews(menuItem, orderId = null) {
     try {
       setLoadingReviews(true);
       setReviewTarget(menuItem);
+      setReviewOrderId(orderId);
+
       const res = await api.getMenuItemReviews(menuItem.id);
       setReviews(res.data || []);
     } catch (error) {
@@ -165,22 +167,23 @@ export default function CustomerPage() {
     } finally {
       setLoadingReviews(false);
     }
-  }
+}
 
   function handleCloseReviews() {
     setReviewTarget(null);
     setReviews([]);
     setReviewRating("5");
     setReviewComment("");
+    setReviewOrderId(null);
   }
 
   async function handleSubmitReview() {
-    if (!reviewTarget) return;
+    if (!reviewTarget || !reviewOrderId) return;
 
     try {
       setSubmittingReview(true);
 
-      await api.createMenuItemReview(reviewTarget.id, {
+      await api.createOrderItemReview(reviewOrderId, reviewTarget.id, {
         rating: Number(reviewRating),
         comment: reviewComment.trim() || null,
       });
@@ -196,7 +199,7 @@ export default function CustomerPage() {
     } finally {
       setSubmittingReview(false);
     }
-  }
+}
 
   async function handleCancelOrder(orderId) {
     try {
@@ -212,8 +215,11 @@ export default function CustomerPage() {
   const activeCalls = dashboard?.active_waiter_calls || [];
   const latestPayment = dashboard?.latest_payment || null;
   const tableInfo = dashboard?.table || null;
+  const [reviewOrderId, setReviewOrderId] = useState(null);
+  const [previewImage, setPreviewImage] = useState(null);
 
   return (
+    <>
     <AppShell
       title="Customer Table Screen"
       subtitle="Browse menu, place orders, call waiter, and request payment."
@@ -272,7 +278,15 @@ export default function CustomerPage() {
             <div className="menu-grid">
               {filteredMenu.map((item) => (
                 <div key={item.id} className="menu-card">
-                  <div className="menu-card-top">
+                    <img
+                      src={item.image_url || "/menu/default.jpg"}
+                      alt={item.name}
+                      className="menu-item-image"
+                      onClick={() => setPreviewImage(item.image_url || "/menu/default.jpg")}
+                      style={{ cursor: "zoom-in" }}
+                    />
+
+                    <div className="menu-card-top">
                     <div>
                       <h3>{item.name}</h3>
                       <p className="muted">{item.category_name}</p>
@@ -377,7 +391,27 @@ export default function CustomerPage() {
                         <span>
                           {item.menu_item_name} × {item.quantity}
                         </span>
-                        <strong>{Number(item.line_total).toFixed(2)} ₺</strong>
+
+                        <div className="button-row">
+                          <strong>{Number(item.line_total).toFixed(2)} ₺</strong>
+
+                          {order.status === "delivered" && (
+                            <ActionButton
+                              variant="ghost"
+                              onClick={() =>
+                                handleOpenReviews(
+                                  {
+                                    id: item.menu_item_id,
+                                    name: item.menu_item_name,
+                                  },
+                                  order.id
+                                )
+                              }
+                            >
+                              Review
+                            </ActionButton>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -446,40 +480,44 @@ export default function CustomerPage() {
                 Close
               </ActionButton>
             </div>
+            {reviewOrderId ? (
             <div className="review-form-box">
-              <div className="inline-form">
-                <Field label="Rating">
-                  <SelectInput
-                    value={reviewRating}
-                    onChange={setReviewRating}
-                    options={[
-                      { value: "5", label: "5" },
-                      { value: "4", label: "4" },
-                      { value: "3", label: "3" },
-                      { value: "2", label: "2" },
-                      { value: "1", label: "1" },
-                    ]}
-                  />
-                </Field>
+              
+                <div className="inline-form">
+                  <Field label="Rating">
+                    <SelectInput
+                      value={reviewRating}
+                      onChange={setReviewRating}
+                      options={[
+                        { value: "5", label: "5" },
+                        { value: "4", label: "4" },
+                        { value: "3", label: "3" },
+                        { value: "2", label: "2" },
+                        { value: "1", label: "1" },
+                      ]}
+                    />
+                  </Field>
 
-                <Field label="Comment">
-                  <input
-                    className="text-input"
-                    value={reviewComment}
-                    onChange={(e) => setReviewComment(e.target.value)}
-                    placeholder="Write a short comment"
-                  />
-                </Field>
+                  <Field label="Comment">
+                    <input
+                      className="text-input"
+                      value={reviewComment}
+                      onChange={(e) => setReviewComment(e.target.value)}
+                      placeholder="Write a short comment"
+                    />
+                  </Field>
 
 
 
-                <div className="button-row">
-                  <ActionButton onClick={handleSubmitReview} disabled={submittingReview}>
-                    {submittingReview ? "Submitting..." : "Submit Review"}
-                  </ActionButton>
+                  <div className="button-row">
+                    <ActionButton onClick={handleSubmitReview} disabled={submittingReview}>
+                      {submittingReview ? "Submitting..." : "Submit Review"}
+                    </ActionButton>
+                  </div>
                 </div>
-              </div>
-            </div>
+              
+             </div>
+            ) : null}
             {loadingReviews ? (
               <EmptyState text="Loading reviews..." />
             ) : reviews.length === 0 ? (
@@ -501,5 +539,13 @@ export default function CustomerPage() {
         </div>
       ) : null}
     </AppShell>
+    {previewImage && (
+      <div className="overlay" onClick={() => setPreviewImage(null)}>
+        <div className="image-preview-modal" onClick={(e) => e.stopPropagation()}>
+          <img src={previewImage} alt="preview" />
+        </div>
+      </div>
+    )}
+    </>
   );
 }

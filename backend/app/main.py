@@ -137,31 +137,98 @@ def get_menu_item_reviews(menu_item_id: int):
         "data": reviews,
     }
 
-@app.post("/api/menu-items/{menu_item_id}/reviews")
-def create_menu_item_review(menu_item_id: int, payload: MenuItemReviewCreateRequest):
-    menu_item = fetch_one(
+@app.get("/api/menu-items/{menu_item_id}/reviews")
+def get_menu_item_reviews(menu_item_id: int):
+    query = """
+        SELECT
+            id,
+            order_id,
+            menu_item_id,
+            rating,
+            comment,
+            created_at
+        FROM menu_item_reviews
+        WHERE menu_item_id = %s
+        ORDER BY created_at DESC;
+    """
+    reviews = fetch_all(query, (menu_item_id,))
+
+    return {
+        "success": True,
+        "count": len(reviews),
+        "data": reviews,
+    }
+
+
+@app.post("/api/orders/{order_id}/items/{menu_item_id}/review")
+def create_order_item_review(
+    order_id: int,
+    menu_item_id: int,
+    payload: MenuItemReviewCreateRequest,
+):
+    order = fetch_one(
         """
-        SELECT id, name
-        FROM menu_items
+        SELECT id, status
+        FROM orders
         WHERE id = %s;
         """,
-        (menu_item_id,),
+        (order_id,),
     )
 
-    if not menu_item:
-        raise HTTPException(status_code=404, detail="Menu item not found.")
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
+
+    if order["status"] != "delivered":
+        raise HTTPException(
+            status_code=400,
+            detail="You can review items only after the order is delivered and before payment.",
+        )
+
+    ordered_item = fetch_one(
+        """
+        SELECT oi.id
+        FROM order_items oi
+        WHERE oi.order_id = %s
+          AND oi.menu_item_id = %s
+        LIMIT 1;
+        """,
+        (order_id, menu_item_id),
+    )
+
+    if not ordered_item:
+        raise HTTPException(
+            status_code=400,
+            detail="You can only review items from your own delivered order.",
+        )
+
+    existing_review = fetch_one(
+        """
+        SELECT id
+        FROM menu_item_reviews
+        WHERE order_id = %s
+          AND menu_item_id = %s;
+        """,
+        (order_id, menu_item_id),
+    )
+
+    if existing_review:
+        raise HTTPException(
+            status_code=400,
+            detail="You already reviewed this item for this order.",
+        )
 
     review = fetch_one(
         """
         INSERT INTO menu_item_reviews (
+            order_id,
             menu_item_id,
             rating,
             comment
         )
-        VALUES (%s, %s, %s)
-        RETURNING id, menu_item_id, rating, comment, created_at;
+        VALUES (%s, %s, %s, %s)
+        RETURNING id, order_id, menu_item_id, rating, comment, created_at;
         """,
-        (menu_item_id, payload.rating, payload.comment),
+        (order_id, menu_item_id, payload.rating, payload.comment),
     )
 
     return {
@@ -1989,4 +2056,64 @@ def create_kitchen_ingredient(payload: IngredientCreateRequest):
         "success": True,
         "message": "Ingredient created successfully.",
         "data": created,
+    }
+
+@app.post("/api/orders/{order_id}/items/{menu_item_id}/review")
+def create_order_item_review(
+    order_id: int,
+    menu_item_id: int,
+    payload: MenuItemReviewCreateRequest,
+):
+    order = fetch_one(
+        """
+        SELECT id, status
+        FROM orders
+        WHERE id = %s;
+        """,
+        (order_id,),
+    )
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
+
+    if order["status"] != "delivered":
+        raise HTTPException(
+            status_code=400,
+            detail="You can review items only after the order is delivered and before payment.",
+        )
+
+    ordered_item = fetch_one(
+        """
+        SELECT oi.id
+        FROM order_items oi
+        WHERE oi.order_id = %s
+          AND oi.menu_item_id = %s
+        LIMIT 1;
+        """,
+        (order_id, menu_item_id),
+    )
+
+    if not ordered_item:
+        raise HTTPException(
+            status_code=400,
+            detail="You can only review items from your own delivered order.",
+        )
+
+    review = fetch_one(
+        """
+        INSERT INTO menu_item_reviews (
+            menu_item_id,
+            rating,
+            comment
+        )
+        VALUES (%s, %s, %s)
+        RETURNING id, menu_item_id, rating, comment, created_at;
+        """,
+        (menu_item_id, payload.rating, payload.comment),
+    )
+
+    return {
+        "success": True,
+        "message": "Review created successfully.",
+        "data": review,
     }

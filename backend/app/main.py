@@ -126,26 +126,6 @@ def get_menu_item_reviews(menu_item_id: int):
     query = """
         SELECT
             id,
-            menu_item_id,
-            rating,
-            comment,
-            created_at
-        FROM menu_item_reviews
-        WHERE menu_item_id = %s
-        ORDER BY created_at DESC;
-    """
-    reviews = fetch_all(query, (menu_item_id,))
-    return {
-        "success": True,
-        "count": len(reviews),
-        "data": reviews,
-    }
-
-@app.get("/api/menu-items/{menu_item_id}/reviews")
-def get_menu_item_reviews(menu_item_id: int):
-    query = """
-        SELECT
-            id,
             order_id,
             menu_item_id,
             rating,

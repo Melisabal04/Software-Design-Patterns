@@ -90,6 +90,12 @@ export const api = {
     }),
   getWaiterDashboard: () => request("/waiter/dashboard"),
 
+  moveTable: (payload) =>
+    request("/waiter/move-table", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
   getWaiterCalls: (params = {}) => {
     const search = new URLSearchParams();
     if (params.status) search.set("status", params.status);

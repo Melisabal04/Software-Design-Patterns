@@ -14,15 +14,27 @@ import {
 
 export default function WaiterPage() {
   const [dashboard, setDashboard] = useState(null);
+  const [menuItems, setMenuItems] = useState([]);
   const [message, setMessage] = useState("");
+
   const [waiterId, setWaiterId] = useState("1");
   const [waiterPin, setWaiterPin] = useState("");
   const [deliveryPins, setDeliveryPins] = useState({});
 
+  const [orderTableId, setOrderTableId] = useState("");
+  const [selectedMenuItemId, setSelectedMenuItemId] = useState("");
+  const [orderQuantity, setOrderQuantity] = useState("1");
+
+  const [fromTableId, setFromTableId] = useState("");
+  const [toTableId, setToTableId] = useState("");
+
   async function loadData() {
     try {
-      const res = await api.getWaiterDashboard();
-      setDashboard(res.data || null);
+      const dashboardRes = await api.getWaiterDashboard();
+      setDashboard(dashboardRes.data || null);
+
+      const menuRes = await api.getMenuItems();
+      setMenuItems(menuRes.data || []);
     } catch (error) {
       setMessage(error.message);
     }
@@ -80,6 +92,7 @@ export default function WaiterPage() {
       setMessage(error.message);
     }
   }
+
   async function markNotificationRead(notificationId) {
     try {
       await api.markNotificationAsRead(notificationId);
@@ -89,6 +102,74 @@ export default function WaiterPage() {
       setMessage(error.message);
     }
   }
+
+  async function createWaiterOrder() {
+    try {
+      if (!orderTableId) {
+        setMessage("Please enter table ID.");
+        return;
+      }
+
+      if (!selectedMenuItemId) {
+        setMessage("Please select a menu item.");
+        return;
+      }
+
+      if (!orderQuantity || Number(orderQuantity) <= 0) {
+        setMessage("Quantity must be greater than 0.");
+        return;
+      }
+
+      await api.createOrder({
+        table_id: Number(orderTableId),
+        created_by_type: "waiter",
+        created_by_staff_id: Number(waiterId),
+        order_type: "additional",
+        items: [
+          {
+            menu_item_id: Number(selectedMenuItemId),
+            quantity: Number(orderQuantity),
+          },
+        ],
+      });
+
+      setMessage("Order created successfully for the selected table.");
+      setOrderTableId("");
+      setSelectedMenuItemId("");
+      setOrderQuantity("1");
+      await loadData();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function moveTable() {
+    try {
+      if (!fromTableId) {
+        setMessage("Please enter old table ID.");
+        return;
+      }
+
+      if (!toTableId) {
+        setMessage("Please enter new table ID.");
+        return;
+      }
+
+      await api.moveTable({
+        from_table_id: Number(fromTableId),
+        to_table_id: Number(toTableId),
+        waiter_id: Number(waiterId),
+      });
+
+      setMessage("Table changed successfully.");
+      setFromTableId("");
+      setToTableId("");
+      await loadData();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
   const pendingCalls = dashboard?.pending_calls || [];
   const readyOrders = dashboard?.ready_orders || [];
   const pendingPayments = dashboard?.pending_payments || [];
@@ -97,7 +178,7 @@ export default function WaiterPage() {
   return (
     <AppShell
       title="Waiter Panel"
-      subtitle="Handle calls, delivery verification, and payment completion."
+      subtitle="Handle calls, delivery verification, payment completion, table change, and waiter-side orders."
       accent="mint"
       actions={<NavPills />}
     >
@@ -125,6 +206,69 @@ export default function WaiterPage() {
             <StatCard label="Pending Payments" value={pendingPayments.length} tone="waiter" />
             <StatCard label="Unread Notifications" value={unreadNotifications.length} tone="waiter" />
           </div>
+        </PanelCard>
+
+        <PanelCard title="Create Order For Table" hint="Waiter can create an order for any table">
+          <div className="inline-form">
+            <Field label="Table ID">
+              <TextInput
+                value={orderTableId}
+                onChange={setOrderTableId}
+                placeholder="Example: 1"
+              />
+            </Field>
+
+            <Field label="Menu Item">
+              <select
+                className="text-input"
+                value={selectedMenuItemId}
+                onChange={(event) => setSelectedMenuItemId(event.target.value)}
+              >
+                <option value="">Select menu item</option>
+                {menuItems.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name} - {Number(item.price).toFixed(2)} ₺
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field label="Quantity">
+              <TextInput
+                value={orderQuantity}
+                onChange={setOrderQuantity}
+                placeholder="1"
+              />
+            </Field>
+          </div>
+
+          <ActionButton onClick={createWaiterOrder}>
+            Create Order
+          </ActionButton>
+        </PanelCard>
+
+        <PanelCard title="Change Table" hint="Move active session, orders, calls, and payments to another table">
+          <div className="inline-form">
+            <Field label="Old Table ID">
+              <TextInput
+                value={fromTableId}
+                onChange={setFromTableId}
+                placeholder="Current table"
+              />
+            </Field>
+
+            <Field label="New Table ID">
+              <TextInput
+                value={toTableId}
+                onChange={setToTableId}
+                placeholder="New table"
+              />
+            </Field>
+          </div>
+
+          <ActionButton onClick={moveTable}>
+            Change Table
+          </ActionButton>
         </PanelCard>
 
         <PanelCard title="Waiter Calls" hint="Help and payment calls from tables">
@@ -185,7 +329,7 @@ export default function WaiterPage() {
                     <StatusBadge status={order.status} />
                   </div>
 
-                    <Field label="Customer Delivery ID">
+                  <Field label="Customer Delivery ID">
                     <TextInput
                       value={deliveryPins[order.id] || ""}
                       onChange={(value) =>
@@ -259,7 +403,7 @@ export default function WaiterPage() {
               ))}
             </div>
           )}
-        </PanelCard>       
+        </PanelCard>
       </div>
     </AppShell>
   );

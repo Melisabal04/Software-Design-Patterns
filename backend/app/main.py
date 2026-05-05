@@ -46,6 +46,10 @@ class PayOrderRequest(BaseModel):
     pin: str
     payment_method: Literal["card", "cash"] = "card"
 
+class MoveTableRequest(BaseModel):
+    from_table_id: int
+    to_table_id: int
+    waiter_id: int
 
 class WaiterCallActionRequest(BaseModel):
     staff_id: int
@@ -1194,6 +1198,153 @@ def request_payment(order_id: int):
         "message": "Payment request created successfully.",
         "data": result,
     }
+
+
+@app.post("/api/waiter/move-table")
+def move_table(payload: MoveTableRequest):
+    if payload.from_table_id == payload.to_table_id:
+        raise HTTPException(status_code=400, detail="Old table and new table cannot be same.")
+
+    waiter = fetch_one(
+        """
+        SELECT id, role, is_active
+        FROM staff_users
+        WHERE id = %s AND role = 'waiter';
+        """,
+        (payload.waiter_id,),
+    )
+
+    if not waiter:
+        raise HTTPException(status_code=404, detail="Waiter not found.")
+
+    if not waiter["is_active"]:
+        raise HTTPException(status_code=400, detail="Waiter is not active.")
+
+    from_table = fetch_one(
+        """
+        SELECT id, table_number, status
+        FROM restaurant_tables
+        WHERE id = %s;
+        """,
+        (payload.from_table_id,),
+    )
+
+    if not from_table:
+        raise HTTPException(status_code=404, detail="Old table not found.")
+
+    to_table = fetch_one(
+        """
+        SELECT id, table_number, status
+        FROM restaurant_tables
+        WHERE id = %s;
+        """,
+        (payload.to_table_id,),
+    )
+
+    if not to_table:
+        raise HTTPException(status_code=404, detail="New table not found.")
+
+    active_session = fetch_one(
+        """
+        SELECT id
+        FROM table_sessions
+        WHERE table_id = %s AND status = 'active'
+        ORDER BY started_at DESC
+        LIMIT 1;
+        """,
+        (payload.from_table_id,),
+    )
+
+    if not active_session:
+        raise HTTPException(status_code=404, detail="Old table has no active session.")
+
+    target_session = fetch_one(
+        """
+        SELECT id
+        FROM table_sessions
+        WHERE table_id = %s AND status = 'active'
+        ORDER BY started_at DESC
+        LIMIT 1;
+        """,
+        (payload.to_table_id,),
+    )
+
+    if target_session:
+        raise HTTPException(status_code=400, detail="New table already has an active session.")
+
+    session_id = active_session["id"]
+
+    def tx(conn, cur):
+        cur.execute(
+            """
+            UPDATE table_sessions
+            SET table_id = %s
+            WHERE id = %s;
+            """,
+            (payload.to_table_id, session_id),
+        )
+
+        cur.execute(
+            """
+            UPDATE orders
+            SET table_id = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE session_id = %s
+              AND status NOT IN ('paid', 'cancelled');
+            """,
+            (payload.to_table_id, session_id),
+        )
+
+        cur.execute(
+            """
+            UPDATE waiter_calls
+            SET table_id = %s
+            WHERE session_id = %s
+              AND status IN ('pending', 'seen');
+            """,
+            (payload.to_table_id, session_id),
+        )
+
+        cur.execute(
+            """
+            UPDATE payments
+            SET table_id = %s
+            WHERE session_id = %s
+              AND status = 'pending';
+            """,
+            (payload.to_table_id, session_id),
+        )
+
+        cur.execute(
+            """
+            UPDATE restaurant_tables
+            SET status = 'available'
+            WHERE id = %s;
+            """,
+            (payload.from_table_id,),
+        )
+
+        cur.execute(
+            """
+            UPDATE restaurant_tables
+            SET status = 'occupied'
+            WHERE id = %s;
+            """,
+            (payload.to_table_id,),
+        )
+
+    execute_transaction(tx)
+
+    return {
+        "success": True,
+        "message": "Table changed successfully.",
+        "data": {
+            "session_id": session_id,
+            "from_table_id": payload.from_table_id,
+            "to_table_id": payload.to_table_id,
+        },
+    }
+
 
 @app.get("/api/waiter/dashboard")
 def get_waiter_dashboard():

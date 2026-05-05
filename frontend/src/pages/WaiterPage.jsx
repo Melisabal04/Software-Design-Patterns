@@ -103,45 +103,60 @@ export default function WaiterPage() {
     }
   }
 
-  async function createWaiterOrder() {
-    try {
-      if (!orderTableId) {
-        setMessage("Please enter table ID.");
-        return;
-      }
-
-      if (!selectedMenuItemId) {
-        setMessage("Please select a menu item.");
-        return;
-      }
-
-      if (!orderQuantity || Number(orderQuantity) <= 0) {
-        setMessage("Quantity must be greater than 0.");
-        return;
-      }
-
-      await api.createOrder({
-        table_id: Number(orderTableId),
-        created_by_type: "waiter",
-        created_by_staff_id: Number(waiterId),
-        order_type: "additional",
-        items: [
-          {
-            menu_item_id: Number(selectedMenuItemId),
-            quantity: Number(orderQuantity),
-          },
-        ],
-      });
-
-      setMessage("Order created successfully for the selected table.");
-      setOrderTableId("");
-      setSelectedMenuItemId("");
-      setOrderQuantity("1");
-      await loadData();
-    } catch (error) {
-      setMessage(error.message);
+async function createWaiterOrder() {
+  try {
+    if (!orderTableId) {
+      setMessage("Please enter table ID.");
+      return;
     }
+
+    if (!selectedMenuItemId) {
+      setMessage("Please select a menu item.");
+      return;
+    }
+
+    if (!orderQuantity || Number(orderQuantity) <= 0) {
+      setMessage("Quantity must be greater than 0.");
+      return;
+    }
+
+    // 🔥 BURASI ÖNEMLİ
+    let session = null;
+
+    try {
+      const res = await api.getActiveSession(Number(orderTableId));
+      session = res.data;
+    } catch (e) {
+      session = null;
+    }
+
+    const orderType = session ? "additional" : "initial";
+
+    // 🔥 BURASI ÖNEMLİ
+    await api.createOrder({
+      table_id: Number(orderTableId),
+      created_by_type: "waiter",
+      created_by_staff_id: Number(waiterId),
+      order_type: orderType,
+      items: [
+        {
+          menu_item_id: Number(selectedMenuItemId),
+          quantity: Number(orderQuantity),
+        },
+      ],
+    });
+
+    setMessage(`Order created successfully (${orderType}).`);
+
+    setOrderTableId("");
+    setSelectedMenuItemId("");
+    setOrderQuantity("1");
+
+    await loadData();
+  } catch (error) {
+    setMessage(error.message);
   }
+}
 
   async function moveTable() {
     try {

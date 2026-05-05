@@ -291,7 +291,7 @@ export default function CustomerPage() {
                       <h3>{item.name}</h3>
                       <p className="muted">{item.category_name}</p>
                     </div>
-                    <StatusBadge status={item.is_available ? "ready" : "cancelled"} />
+                    <StatusBadge status={item.is_available ? "ready" : "Out of Stock"} />
                   </div>
                   <p className="menu-description">{item.description || "No description."}</p>
                   <div className="menu-meta">

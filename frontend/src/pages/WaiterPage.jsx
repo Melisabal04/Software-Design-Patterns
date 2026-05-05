@@ -24,7 +24,7 @@ export default function WaiterPage() {
   const [orderTableId, setOrderTableId] = useState("");
   const [selectedMenuItemId, setSelectedMenuItemId] = useState("");
   const [orderQuantity, setOrderQuantity] = useState("1");
-
+  const [waiterOrderItems, setWaiterOrderItems] = useState([]);
   const [fromTableId, setFromTableId] = useState("");
   const [toTableId, setToTableId] = useState("");
 
@@ -103,6 +103,56 @@ export default function WaiterPage() {
     }
   }
 
+function addItemToWaiterOrder() {
+  if (!selectedMenuItemId) {
+    setMessage("Please select a menu item.");
+    return;
+  }
+
+  if (!orderQuantity || Number(orderQuantity) <= 0) {
+    setMessage("Quantity must be greater than 0.");
+    return;
+  }
+
+  const menuItem = menuItems.find((item) => item.id === Number(selectedMenuItemId));
+
+  if (!menuItem) {
+    setMessage("Selected menu item not found.");
+    return;
+  }
+
+  setWaiterOrderItems((prev) => {
+    const existing = prev.find((item) => item.menu_item_id === Number(selectedMenuItemId));
+
+    if (existing) {
+      return prev.map((item) =>
+        item.menu_item_id === Number(selectedMenuItemId)
+          ? { ...item, quantity: item.quantity + Number(orderQuantity) }
+          : item
+      );
+    }
+
+    return [
+      ...prev,
+      {
+        menu_item_id: Number(selectedMenuItemId),
+        menu_item_name: menuItem.name,
+        quantity: Number(orderQuantity),
+      },
+    ];
+  });
+
+  setSelectedMenuItemId("");
+  setOrderQuantity("1");
+  setMessage("Item added to waiter order.");
+}
+
+function removeItemFromWaiterOrder(menuItemId) {
+  setWaiterOrderItems((prev) =>
+    prev.filter((item) => item.menu_item_id !== menuItemId)
+  );
+}
+
 async function createWaiterOrder() {
   try {
     if (!orderTableId) {
@@ -110,13 +160,8 @@ async function createWaiterOrder() {
       return;
     }
 
-    if (!selectedMenuItemId) {
-      setMessage("Please select a menu item.");
-      return;
-    }
-
-    if (!orderQuantity || Number(orderQuantity) <= 0) {
-      setMessage("Quantity must be greater than 0.");
+    if (waiterOrderItems.length === 0) {
+      setMessage("Please add at least one item to the order.");
       return;
     }
 
@@ -138,12 +183,10 @@ async function createWaiterOrder() {
       created_by_type: "waiter",
       created_by_staff_id: Number(waiterId),
       order_type: orderType,
-      items: [
-        {
-          menu_item_id: Number(selectedMenuItemId),
-          quantity: Number(orderQuantity),
-        },
-      ],
+      items: waiterOrderItems.map((item) => ({
+        menu_item_id: item.menu_item_id,
+        quantity: item.quantity,
+      })),
     });
 
     setMessage(`Order created successfully (${orderType}).`);
@@ -151,6 +194,7 @@ async function createWaiterOrder() {
     setOrderTableId("");
     setSelectedMenuItemId("");
     setOrderQuantity("1");
+    setWaiterOrderItems([]);
 
     await loadData();
   } catch (error) {
@@ -257,9 +301,40 @@ async function createWaiterOrder() {
             </Field>
           </div>
 
-          <ActionButton onClick={createWaiterOrder}>
-            Create Order
-          </ActionButton>
+          <div className="button-row">
+            <ActionButton variant="secondary" onClick={addItemToWaiterOrder}>
+              Add Item
+            </ActionButton>
+
+            <ActionButton onClick={createWaiterOrder}>
+              Create Order
+            </ActionButton>
+          </div>
+
+          {waiterOrderItems.length > 0 ? (
+            <div className="stack gap-sm">
+              {waiterOrderItems.map((item) => (
+                <div key={item.menu_item_id} className="order-card">
+                  <div className="list-row">
+                    <div>
+                      <h3>{item.menu_item_name}</h3>
+                      <p className="muted">Quantity: {item.quantity}</p>
+                    </div>
+
+                    <ActionButton
+                      variant="ghost"
+                      onClick={() => removeItemFromWaiterOrder(item.menu_item_id)}
+                    >
+                      Remove
+                    </ActionButton>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyState text="No items added yet." />
+          )}
+
         </PanelCard>
 
         <PanelCard title="Change Table" hint="Move active session, orders, calls, and payments to another table">

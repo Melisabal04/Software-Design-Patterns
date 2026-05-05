@@ -86,7 +86,17 @@ def get_menu_items():
             mi.description,
             mi.price,
             mi.image_url,
-            mi.is_available,
+            (
+                mi.is_available = TRUE
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM menu_item_ingredients mii
+                    JOIN ingredients i
+                        ON i.id = mii.ingredient_id
+                    WHERE mii.menu_item_id = mi.id
+                    AND i.stock_quantity < mii.quantity_needed
+                )
+            ) AS is_available,
             c.name AS category_name,
             COALESCE(ROUND(AVG(mir.rating)::numeric, 1), 0.0) AS average_rating,
             COUNT(mir.id) AS review_count
@@ -730,6 +740,47 @@ def cancel_order(order_id: int):
             """,
             (order_id, order["status"], "Order cancelled by user"),
         )
+
+        cur.execute(
+            """
+            SELECT session_id, table_id
+            FROM orders
+            WHERE id = %s;
+            """,
+            (order_id,),
+        )
+        cancelled_order = cur.fetchone()
+
+        cur.execute(
+            """
+            SELECT COUNT(*) AS active_order_count
+            FROM orders
+            WHERE session_id = %s
+            AND status NOT IN ('cancelled', 'paid');
+            """,
+            (cancelled_order["session_id"],),
+        )
+        active_count = cur.fetchone()["active_order_count"]
+
+        if active_count == 0:
+            cur.execute(
+                """
+                UPDATE table_sessions
+                SET status = 'closed',
+                    ended_at = CURRENT_TIMESTAMP
+                WHERE id = %s;
+                """,
+                (cancelled_order["session_id"],),
+            )
+
+            cur.execute(
+                """
+                UPDATE restaurant_tables
+                SET status = 'available'
+                WHERE id = %s;
+                """,
+                (cancelled_order["table_id"],),
+            )
 
     execute_transaction(tx)
 
